@@ -1,0 +1,25 @@
+# Oracle Monitor Exclusion List
+# Any line containing these patterns will be excluded from email alerts
+# Lines starting with # are comments and will be ignored
+# Add one pattern per line - partial matches are supported
+
+# Listener False Positives
+SID_LIST_LISTENER
+ADMIN_RESTRICTIONS_LISTENER
+INBOUND_CONNECT_TIMEOUT_LISTENER
+SECURE_CONTROL_LISTENER
+SECURE_REGISTER_LISTENER
+
+# Known Test Instances
+
+# Known Non-Critical Alert Log Patterns
+Tns error struct
+
+# Example: Exclude specific database alerts
+# Database: testdb
+
+# Example: Exclude specific error codes
+# ORA-00001
+
+# Example: Exclude specific tablespace warnings
+# TEMP tablespace

@@ -1,0 +1,25 @@
+Dossiers d'origine:
+
+- /backup/rman/FULL_BD_DUMP/
+- /backup/rman/ALL_ARCHIVE_LOGS/
+- /backup/sauv_ap/
+- /backup/sauv_av/
+
+Dossiers d'archivage:
+- /housekeeping/rman/FULL_BD_DUMP/
+- /housekeeping/rman/ALL_ARCHIVE_LOGS/
+- /housekeeping/sauv_ap/
+- /housekeeping/sauv_av/
+
+Servers d'archivage: 192.168.13.201
+username : oracle
+Connection type : ssh passwordless
+
+
+
+
+rsync -avP /backup/rman/FULL_BD_DUMP/ /housekeeping/rman/FULL_BD_DUMP/
+
+rsync -avP /backup/rman/ALL_ARCHIVE_LOGS/ /housekeeping/rman/ALL_ARCHIVE_LOGS/
+rsync -avP /backup/sauv_ap/ /housekeeping/sauv_ap/
+rsync -avP /backup/sauv_av/ /housekeeping/sauv_av/
