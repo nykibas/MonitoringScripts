@@ -1,13 +1,15 @@
 #!/bin/bash
 
 # ==============================================================================
-# SCRIPT DE GESTION ET COMPRESSION DES ARCHIVES
+# SCRIPT DE GESTION ET COMPRESSION DES ARCHIVES (À DEUX NIVEAUX)
 # PROPRIÉTAIRE : Yannick Nzau (Antigravity AI Assistant)
-# DESCRIPTION   : Lit folders_to_sync.txt, transfère les fichiers vers le serveur
-#                 d'archivage distant via rsync, vérifie la présence et la taille,
-#                 puis compresse (gzip) et regroupe mensuellement (AAAA-MM) sur le 
-#                 serveur distant. Supprime ensuite les fichiers locaux des mois
-#                 précédents (ne garde que le mois en cours localement).
+# DESCRIPTION   : 
+#   1. Niveau Local : Copie les sauvegardes depuis /backup/... vers /housekeeping/...,
+#      les compresse en .gz et les regroupe dans des dossiers mensuels (AAAA-MM).
+#   2. Niveau Distant : Synchronise le répertoire d'archivage local /housekeeping/...
+#      vers le serveur d'archivage distant via rsync.
+#   3. Nettoyage : Supprime les fichiers locaux du répertoire d'origine (/backup/...)
+#      des mois précédents (seul le mois en cours est conservé localement).
 # ==============================================================================
 
 # Mode strict
@@ -34,7 +36,7 @@ SOURCES=(
     "/backup/sauv_av/"
 )
 
-# Répertoires d'archivage correspondants (distants)
+# Répertoires d'archivage correspondants (locaux et distants)
 DESTS=(
     "/housekeeping/rman/FULL_BD_DUMP/"
     "/housekeeping/rman/ALL_ARCHIVE_LOGS/"
@@ -69,151 +71,125 @@ for i in "${!SOURCES[@]}"; do
     [[ "$DST_DIR" != */ ]] && DST_DIR="$DST_DIR/"
     
     echo "------------------------------------------------------------"
-    echo "Traitement : $SRC_DIR ===> ${ARCHIVE_USER}@${ARCHIVE_SERVER}:$DST_DIR"
+    echo "Traitement de la source : $SRC_DIR"
     echo "------------------------------------------------------------"
     
     if [[ ! -d "$SRC_DIR" ]]; then
-        echo "ATTENTION : Le répertoire local $SRC_DIR n'existe pas. Passage au suivant."
+        echo "ATTENTION : Le répertoire local d'origine $SRC_DIR n'existe pas. Passage au suivant."
         continue
     fi
     
-    # S'assurer que le répertoire d'archivage de base existe sur le serveur distant
+    # S'assurer que le répertoire d'archivage local existe
     if [[ "$DRY_RUN" == "false" ]]; then
-        ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "mkdir -p \"$DST_DIR\""
+        mkdir -p "$DST_DIR"
     else
-        echo "[Dry-Run] mkdir -p \"$DST_DIR\" sur le serveur distant."
+        echo "[Dry-Run] mkdir -p local : $DST_DIR"
     fi
     
-    # Inventaire de tous les fichiers distants (chemin et taille) pour optimiser
-    echo "Inventaire des fichiers archivés distants..."
-    if [[ "$DRY_RUN" == "false" ]]; then
-        # Exécute find et stat pour avoir tous les fichiers existants sous DST_DIR
-        REMOTE_INVENTORY=$(ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "find \"$DST_DIR\" -type f -exec stat -c '%n:%s' {} +" 2>/dev/null || true)
-    else
-        REMOTE_INVENTORY=""
-    fi
-    
-    # Fonction locale de recherche dans l'inventaire distant
-    get_remote_size() {
-        local path="$1"
-        echo "$REMOTE_INVENTORY" | grep -F "${path}:" | sed 's/.*://' | head -n 1
-    }
-    
-    # Lister les fichiers locaux
+    # Lister les fichiers locaux dans le dossier d'origine
     LOCAL_FILES=$(find "$SRC_DIR" -type f)
     
-    if [[ -z "$LOCAL_FILES" ]]; then
-        echo "Aucun fichier local trouvé dans $SRC_DIR."
-        continue
-    fi
-    
-    while IFS= read -r LOCAL_FILE; do
-        REL_PATH="${LOCAL_FILE#$SRC_DIR}"
-        LOCAL_SIZE=$(stat -c %s "$LOCAL_FILE")
-        
-        # Obtenir la date de modification du fichier
-        FILE_MTIME=$(stat -c %Y "$LOCAL_FILE")
-        FILE_MONTH=$(date -r "$LOCAL_FILE" +%Y-%m)
-        
-        # Éviter de traiter les fichiers modifiés il y a moins de 10 minutes (sauvegarde en cours)
-        AGE=$((CURRENT_TIME - FILE_MTIME))
-        if [[ $AGE -lt 600 ]]; then
-            echo "Skipping $REL_PATH : Fichier en cours d'écriture ou récemment modifié ($AGE secondes)."
-            continue
-        fi
-        
-        # Chemins attendus sur le serveur d'archivage
-        REMOTE_UNCOMPRESSED_PATH="${DST_DIR}${REL_PATH}"
-        REMOTE_COMPRESSED_PATH="${DST_DIR}${FILE_MONTH}/${REL_PATH}.gz"
-        
-        # 1. Vérification s'il est déjà archivé et compressé mensuellement
-        COMPRESSED_SIZE=$(get_remote_size "$REMOTE_COMPRESSED_PATH")
-        if [[ -n "$COMPRESSED_SIZE" ]]; then
-            echo "Déjà archivé (compressé) : $REL_PATH dans le dossier mensuel $FILE_MONTH"
-            # Si le fichier d'origine appartient à un mois précédent, nettoyage local
-            if [[ "$FILE_MONTH" != "$CURRENT_MONTH" ]]; then
-                if [[ "$DRY_RUN" == "false" ]]; then
-                    echo "Suppression locale du vieux fichier : $LOCAL_FILE"
-                    rm -f "$LOCAL_FILE"
-                else
-                    echo "[Dry-Run] Suppression locale du vieux fichier : $LOCAL_FILE"
-                fi
-            else
-                echo "Fichier local conservé car il est du mois en cours ($FILE_MONTH)."
-            fi
-            continue
-        fi
-        
-        # 2. Vérification s'il existe en version non compressée sur le serveur distant
-        UNCOMPRESSED_SIZE=$(get_remote_size "$REMOTE_UNCOMPRESSED_PATH")
-        IS_VALID=false
-        
-        if [[ -n "$UNCOMPRESSED_SIZE" && "$UNCOMPRESSED_SIZE" -eq "$LOCAL_SIZE" ]]; then
-            echo "Déjà présent et valide : $REL_PATH (taille : $LOCAL_SIZE octets)"
-            IS_VALID=true
-        else
-            # 3. Synchronisation car non présent ou taille différente
-            echo "Archivage requis pour : $REL_PATH (taille locale : $LOCAL_SIZE octets)"
-            if [[ "$DRY_RUN" == "false" ]]; then
-                # S'assurer que le sous-dossier de destination existe (pour les arborescences imbriquées)
-                REMOTE_PARENT_DIR=$(dirname "$REMOTE_UNCOMPRESSED_PATH")
-                ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "mkdir -p \"$REMOTE_PARENT_DIR\""
-                
-                # Transfert du fichier
-                rsync -avz -e ssh "$LOCAL_FILE" "${ARCHIVE_USER}@${ARCHIVE_SERVER}:${REMOTE_UNCOMPRESSED_PATH}"
-                
-                # Vérification après transfert
-                REMOTE_CHECK_SIZE=$(ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "stat -c %s \"$REMOTE_UNCOMPRESSED_PATH\"" 2>/dev/null || echo "0")
-                if [[ "$REMOTE_CHECK_SIZE" -eq "$LOCAL_SIZE" ]]; then
-                    echo "Vérification OK pour : $REL_PATH"
-                    IS_VALID=true
-                else
-                    echo "ERREUR : Échec de la vérification de taille pour $REL_PATH après rsync." >&2
-                fi
-            else
-                echo "[Dry-Run] rsync $LOCAL_FILE vers ${ARCHIVE_USER}@${ARCHIVE_SERVER}:${REMOTE_UNCOMPRESSED_PATH}"
-                IS_VALID=true
-            fi
-        fi
-        
-        # 4. Compression et Déplacement mensuel
-        if [[ "$IS_VALID" == "true" ]]; then
-            if [[ "$DRY_RUN" == "false" ]]; then
-                echo "Compression et regroupement mensuel distant pour : $REL_PATH"
-                # Créer le répertoire mensuel distant
-                ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "mkdir -p \"${DST_DIR}${FILE_MONTH}\""
-                # Compresser (gzip remplace le fichier par .gz)
-                ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "gzip -f \"$REMOTE_UNCOMPRESSED_PATH\""
-                # Déplacer dans le répertoire mensuel
-                ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "mv -f \"${REMOTE_UNCOMPRESSED_PATH}.gz\" \"${DST_DIR}${FILE_MONTH}/\""
-                
-                # Valider que le fichier final compressé est bien présent
-                REMOTE_FINAL_CHECK=$(ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "[ -f \"$REMOTE_COMPRESSED_PATH\" ] && echo 'OK' || echo 'FAIL'")
-                if [[ "$REMOTE_FINAL_CHECK" != "OK" ]]; then
-                    echo "ERREUR : Échec de la validation de la compression distante pour $REMOTE_COMPRESSED_PATH." >&2
-                    continue
-                fi
-            else
-                echo "[Dry-Run] mkdir -p \"${DST_DIR}${FILE_MONTH}\" sur le serveur distant."
-                echo "[Dry-Run] gzip -f \"$REMOTE_UNCOMPRESSED_PATH\" sur le serveur distant."
-                echo "[Dry-Run] mv -f \"${REMOTE_UNCOMPRESSED_PATH}.gz\" \"${DST_DIR}${FILE_MONTH}/\" sur le serveur distant."
+    if [[ -n "$LOCAL_FILES" ]]; then
+        while IFS= read -r LOCAL_FILE; do
+            REL_PATH="${LOCAL_FILE#$SRC_DIR}"
+            LOCAL_SIZE=$(stat -c %s "$LOCAL_FILE")
+            
+            # Obtenir la date de modification du fichier
+            FILE_MTIME=$(stat -c %Y "$LOCAL_FILE")
+            FILE_MONTH=$(date -r "$LOCAL_FILE" +%Y-%m)
+            
+            # Sécurité : Éviter de traiter les fichiers modifiés il y a moins de 10 minutes
+            AGE=$((CURRENT_TIME - FILE_MTIME))
+            if [[ $AGE -lt 600 ]]; then
+                echo "Skipping $REL_PATH : Fichier récemment modifié ou en cours d'écriture ($AGE secondes)."
+                continue
             fi
             
-            # 5. Nettoyage local si le fichier est d'un mois précédent
-            if [[ "$FILE_MONTH" != "$CURRENT_MONTH" ]]; then
-                if [[ "$DRY_RUN" == "false" ]]; then
-                    echo "Nettoyage local : Suppression de $LOCAL_FILE"
-                    rm -f "$LOCAL_FILE"
-                else
-                    echo "[Dry-Run] Nettoyage local : Suppression de $LOCAL_FILE"
-                fi
+            # Chemins d'archivage locaux
+            LOCAL_UNCOMPRESSED_PATH="${DST_DIR}${REL_PATH}"
+            LOCAL_COMPRESSED_PATH="${DST_DIR}${FILE_MONTH}/${REL_PATH}.gz"
+            
+            IS_ARCHIVED_LOCALLY=false
+            
+            # 1. Vérification si le fichier est déjà archivé et compressé localement
+            if [[ -f "$LOCAL_COMPRESSED_PATH" ]]; then
+                echo "Déjà archivé localement (compressé) : $REL_PATH dans $FILE_MONTH"
+                IS_ARCHIVED_LOCALLY=true
             else
-                echo "Fichier local conservé (mois en cours : $FILE_MONTH)."
+                # Archivage local temporaire (non compressé)
+                echo "Archivage local requis pour : $REL_PATH"
+                if [[ "$DRY_RUN" == "false" ]]; then
+                    # S'assurer que le sous-dossier existe (pour préserver la hiérarchie)
+                    mkdir -p "$(dirname "$LOCAL_UNCOMPRESSED_PATH")"
+                    
+                    # Copier le fichier localement
+                    cp -f "$LOCAL_FILE" "$LOCAL_UNCOMPRESSED_PATH"
+                    
+                    # Vérification de la taille locale
+                    COPY_SIZE=$(stat -c %s "$LOCAL_UNCOMPRESSED_PATH")
+                    if [[ "$COPY_SIZE" -eq "$LOCAL_SIZE" ]]; then
+                        # Compression locale
+                        gzip -f "$LOCAL_UNCOMPRESSED_PATH"
+                        
+                        # Créer le répertoire mensuel local
+                        mkdir -p "${DST_DIR}${FILE_MONTH}"
+                        
+                        # Déplacer le fichier compressé
+                        mv -f "${LOCAL_UNCOMPRESSED_PATH}.gz" "${DST_DIR}${FILE_MONTH}/"
+                        
+                        if [[ -f "$LOCAL_COMPRESSED_PATH" ]]; then
+                            echo "Archivage et compression locaux OK pour : $REL_PATH"
+                            IS_ARCHIVED_LOCALLY=true
+                        else
+                            echo "ERREUR : Échec du déplacement du fichier compressé pour $REL_PATH." >&2
+                        fi
+                    else
+                        echo "ERREUR : Échec de la copie locale pour $REL_PATH (différence de taille)." >&2
+                    fi
+                else
+                    echo "[Dry-Run] cp $LOCAL_FILE vers $LOCAL_UNCOMPRESSED_PATH"
+                    echo "[Dry-Run] gzip $LOCAL_UNCOMPRESSED_PATH"
+                    echo "[Dry-Run] mv ${LOCAL_UNCOMPRESSED_PATH}.gz vers ${DST_DIR}${FILE_MONTH}/"
+                    IS_ARCHIVED_LOCALLY=true
+                fi
             fi
-        fi
+            
+            # 2. Nettoyage local du répertoire d'origine si le fichier appartient à un mois précédent
+            if [[ "$IS_ARCHIVED_LOCALLY" == "true" ]]; then
+                if [[ "$FILE_MONTH" != "$CURRENT_MONTH" ]]; then
+                    if [[ "$DRY_RUN" == "false" ]]; then
+                        echo "Nettoyage d'origine : Suppression de $LOCAL_FILE (mois précédent : $FILE_MONTH)"
+                        rm -f "$LOCAL_FILE"
+                    else
+                        echo "[Dry-Run] Nettoyage d'origine : Suppression de $LOCAL_FILE"
+                    fi
+                else
+                    echo "Fichier d'origine conservé (mois en cours : $FILE_MONTH) : $REL_PATH"
+                fi
+            fi
+            
+        done <<< "$LOCAL_FILES"
+    else
+        echo "Aucun fichier local dans le dossier d'origine $SRC_DIR."
+    fi
+    
+    # 3. Synchronisation vers le serveur d'archivage distant
+    echo "Synchronisation de l'archive locale vers le serveur distant..."
+    if [[ "$DRY_RUN" == "false" ]]; then
+        # S'assurer que le répertoire cible existe sur le serveur distant
+        ssh -n "${ARCHIVE_USER}@${ARCHIVE_SERVER}" "mkdir -p \"$DST_DIR\""
         
-    done <<< "$LOCAL_FILES"
+        # Lancement de rsync pour synchroniser le répertoire d'archivage
+        if rsync -avz -e ssh "$DST_DIR" "${ARCHIVE_USER}@${ARCHIVE_SERVER}:${DST_DIR}"; then
+            echo "Synchronisation distante réussie pour : $DST_DIR"
+        else
+            echo "ERREUR : Échec de la synchronisation distante via rsync pour $DST_DIR." >&2
+        fi
+    else
+        echo "[Dry-Run] ssh mkdir -p $DST_DIR sur le serveur distant"
+        echo "[Dry-Run] rsync -avz -e ssh $DST_DIR vers ${ARCHIVE_USER}@${ARCHIVE_SERVER}:${DST_DIR}"
+    fi
     
 done
 
-echo "Processus d'archivage terminé."
+echo "Processus d'archivage à deux niveaux terminé."
