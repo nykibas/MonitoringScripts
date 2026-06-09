@@ -13,7 +13,7 @@
 # ==============================================================================
 
 # Mode strict
-set -euo pipefail
+set -eo pipefail
 
 # Mode Simulation (Dry Run)
 DRY_RUN=false

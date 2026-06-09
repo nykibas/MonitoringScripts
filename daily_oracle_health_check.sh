@@ -14,7 +14,7 @@
 # ==============================================================================
 
 # Mode strict
-set -euo pipefail
+set -eo pipefail
 
 TIMEOUT=1000
 START_TIME=$(date +%s)
