@@ -22,33 +22,25 @@ if [[ "${1:-}" == "--dry-run" ]]; then
     echo "========================================= "
 fi
 
-# Fichier de configuration
-CONFIG_FILE="folders_to_sync.txt"
+# Configuration de la connexion et des dossiers
+ARCHIVE_SERVER="192.168.13.201"
+ARCHIVE_USER="oracle"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    # Essayer de trouver le fichier dans le dossier courant ou le répertoire parent
-    if [[ -f "d:/MonitoringScripts/folders_to_sync.txt" ]]; then
-        CONFIG_FILE="d:/MonitoringScripts/folders_to_sync.txt"
-    elif [[ -f "/u01/app/oracle/folders_to_sync.txt" ]]; then
-        CONFIG_FILE="/u01/app/oracle/folders_to_sync.txt"
-    elif [[ -f "/backup/folders_to_sync.txt" ]]; then
-        CONFIG_FILE="/backup/folders_to_sync.txt"
-    else
-        echo "ERREUR : Fichier de configuration $CONFIG_FILE introuvable." >&2
-        exit 1
-    fi
-fi
+# Répertoires d'origine (locaux)
+SOURCES=(
+    "/backup/rman/FULL_BD_DUMP/"
+    "/backup/rman/ALL_ARCHIVE_LOGS/"
+    "/backup/sauv_ap/"
+    "/backup/sauv_av/"
+)
 
-echo "Lecture de la configuration depuis: $CONFIG_FILE"
-
-# Extraction des informations de connexion
-ARCHIVE_SERVER=$(grep "Servers d'archivage" "$CONFIG_FILE" | cut -d':' -f2- | xargs)
-ARCHIVE_USER=$(grep "username" "$CONFIG_FILE" | cut -d':' -f2- | xargs)
-
-if [[ -z "$ARCHIVE_SERVER" || -z "$ARCHIVE_USER" ]]; then
-    echo "ERREUR : Impossible de lire les informations du serveur d'archivage ou d'utilisateur." >&2
-    exit 1
-fi
+# Répertoires d'archivage correspondants (distants)
+DESTS=(
+    "/housekeeping/rman/FULL_BD_DUMP/"
+    "/housekeeping/rman/ALL_ARCHIVE_LOGS/"
+    "/housekeeping/sauv_ap/"
+    "/housekeeping/sauv_av/"
+)
 
 echo "Serveur d'archivage distant : $ARCHIVE_SERVER"
 echo "Utilisateur distant        : $ARCHIVE_USER"
@@ -63,15 +55,6 @@ if [[ "$DRY_RUN" == "false" ]]; then
     echo "Connexion SSH OK."
 else
     echo "[Dry-Run] Connexion SSH simulée."
-fi
-
-# Récupération des dossiers d'origine et d'archivage
-SOURCES=($(awk "/Dossiers d'origine:/ {flag=1; next} /Dossiers d'archivage:/ {flag=0} flag && /^-/ {print \$2}" "$CONFIG_FILE"))
-DESTS=($(awk "/Dossiers d'archivage:/ {flag=1; next} /Servers d'archivage:/ {flag=0} flag && /^-/ {print \$2}" "$CONFIG_FILE"))
-
-if [[ ${#SOURCES[@]} -eq 0 || ${#DESTS[@]} -eq 0 || ${#SOURCES[@]} -ne ${#DESTS[@]} ]]; then
-    echo "ERREUR : Incohérence dans les dossiers d'origine et d'archivage dans $CONFIG_FILE." >&2
-    exit 1
 fi
 
 CURRENT_MONTH=$(date +%Y-%m)
