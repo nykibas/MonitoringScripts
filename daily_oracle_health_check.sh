@@ -780,7 +780,7 @@ rm -f $TEMP_REPORT $SUMMARY_ISSUES
 chmod 644 $OUTPUT_FILE
 
 # ===== Configuration de la Messagerie =====
-TO="it@solidarbank.com"
+TO="DSI@solidairebanque.com"
 FROM="monitoring@solidarbank.com"
 SUBJECT="[ALERT ORACLE] Rapport Quotidien de Santé - $(hostname) - $(date +%d/%m/%Y)"
 
