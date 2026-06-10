@@ -781,7 +781,7 @@ chmod 644 $OUTPUT_FILE
 
 # ===== Configuration de la Messagerie =====
 TO="DSI@solidairebanque.com"
-FROM="monitoring@solidarbank.com"
+FROM="monitoring@solidairebanque.com"
 SUBJECT="[ALERT ORACLE] Rapport Quotidien de Santé - $(hostname) - $(date +%d/%m/%Y)"
 
 # Chemin du fichier d'exclusion
