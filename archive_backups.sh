@@ -96,7 +96,21 @@ for i in "${!SOURCES[@]}"; do
             
             # Obtenir la date de modification du fichier
             FILE_MTIME=$(stat -c %Y "$LOCAL_FILE")
-            FILE_MONTH=$(date -r "$LOCAL_FILE" +%Y-%m)
+            
+            # Déterminer le mois à partir du nom du fichier, sinon fallback date de modification
+            BASE_NAME=$(basename "$LOCAL_FILE")
+            DATE_STR=$(echo "$BASE_NAME" | grep -o -E '20[0-9]{6}' | head -n 1 || true)
+            if [[ -n "$DATE_STR" ]]; then
+                YEAR="${DATE_STR:0:4}"
+                MONTH="${DATE_STR:4:2}"
+                if [[ "$MONTH" -ge 1 && "$MONTH" -le 12 ]]; then
+                    FILE_MONTH="${YEAR}-${MONTH}"
+                else
+                    FILE_MONTH=$(date -r "$LOCAL_FILE" +%Y-%m)
+                fi
+            else
+                FILE_MONTH=$(date -r "$LOCAL_FILE" +%Y-%m)
+            fi
             
             # Sécurité : Éviter de traiter les fichiers modifiés il y a moins de 10 minutes
             AGE=$((CURRENT_TIME - FILE_MTIME))
