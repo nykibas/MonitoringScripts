@@ -4,11 +4,12 @@
 # SCRIPT DE GESTION ET COMPRESSION DES ARCHIVES (À DEUX NIVEAUX)
 # PROPRIÉTAIRE : Yannick Nzau (Antigravity AI Assistant)
 # DESCRIPTION   : 
-#   1. Niveau Local : Copie les sauvegardes depuis /backup/... vers /housekeeping/...,
-#      les compresse en .gz et les regroupe dans des dossiers mensuels (AAAA-MM).
-#   2. Niveau Distant : Synchronise le répertoire d'archivage local /housekeeping/...
-#      vers le serveur d'archivage distant via rsync.
-#   3. Nettoyage : Supprime les fichiers locaux du répertoire d'origine (/backup/...)
+#   1. Compression Initiale : Compresse les sauvegardes sur place (.gz) dans /backup/...
+#   2. Niveau Local (Niveau 1) : Copie les sauvegardes compressées directement
+#      dans leur sous-dossier mensuel d'archivage local (ex: /housekeeping/.../AAAA-MM/).
+#   3. Niveau Distant (Niveau 2) : Synchronise le répertoire d'archivage local
+#      /housekeeping/... vers le serveur d'archivage distant via rsync.
+#   4. Nettoyage : Supprime les fichiers gzippés du répertoire d'origine (/backup/...)
 #      des mois précédents (seul le mois en cours est conservé localement).
 # ==============================================================================
 
@@ -87,19 +88,34 @@ for i in "${!SOURCES[@]}"; do
     fi
     
     # Lister les fichiers locaux dans le dossier d'origine
-    LOCAL_FILES=$(find "$SRC_DIR" -type f)
+    LOCAL_FILES=$(find "$SRC_DIR" -type f 2>/dev/null || true)
     
     if [[ -n "$LOCAL_FILES" ]]; then
         while IFS= read -r LOCAL_FILE; do
-            REL_PATH="${LOCAL_FILE#$SRC_DIR}"
-            LOCAL_SIZE=$(stat -c %s "$LOCAL_FILE")
+            if [[ -z "$LOCAL_FILE" ]]; then
+                continue
+            fi
             
-            # Obtenir la date de modification du fichier
+            # S'assurer que le fichier existe toujours
+            if [[ ! -f "$LOCAL_FILE" ]]; then
+                continue
+            fi
+            
+            # Obtenir l'âge du fichier
             FILE_MTIME=$(stat -c %Y "$LOCAL_FILE")
+            AGE=$((CURRENT_TIME - FILE_MTIME))
+            if [[ $AGE -lt 600 ]]; then
+                echo "Skipping $(basename "$LOCAL_FILE") : Fichier récemment modifié ou en cours d'écriture ($AGE secondes)."
+                continue
+            fi
             
-            # Déterminer le mois à partir du nom du fichier, sinon fallback date de modification
+            # Déterminer le mois à partir du nom du fichier d'origine, sinon fallback date de modification
             BASE_NAME=$(basename "$LOCAL_FILE")
-            DATE_STR=$(echo "$BASE_NAME" | grep -o -E '20[0-9]{6}' | head -n 1 || true)
+            # Enlever l'extension .gz si présente pour l'extraction de la date
+            NAME_FOR_DATE="${BASE_NAME%.gz}"
+            DATE_STR=$(echo "$NAME_FOR_DATE" | grep -o -E '20[0-9]{6}' | head -n 1 || true)
+            
+            FILE_MONTH=""
             if [[ -n "$DATE_STR" ]]; then
                 YEAR="${DATE_STR:0:4}"
                 MONTH="${DATE_STR:4:2}"
@@ -112,70 +128,68 @@ for i in "${!SOURCES[@]}"; do
                 FILE_MONTH=$(date -r "$LOCAL_FILE" +%Y-%m)
             fi
             
-            # Sécurité : Éviter de traiter les fichiers modifiés il y a moins de 10 minutes
-            AGE=$((CURRENT_TIME - FILE_MTIME))
-            if [[ $AGE -lt 600 ]]; then
-                echo "Skipping $REL_PATH : Fichier récemment modifié ou en cours d'écriture ($AGE secondes)."
-                continue
+            WORKING_FILE="$LOCAL_FILE"
+            IS_COMPRESSED=false
+            if [[ "$LOCAL_FILE" == *.gz ]]; then
+                IS_COMPRESSED=true
             fi
             
-            # Chemins d'archivage locaux
-            LOCAL_UNCOMPRESSED_PATH="${DST_DIR}${REL_PATH}"
-            LOCAL_COMPRESSED_PATH="${DST_DIR}${FILE_MONTH}/${REL_PATH}.gz"
+            # 1. Compression sur place dans le dossier d'origine si non compressé
+            if [[ "$IS_COMPRESSED" == "false" ]]; then
+                echo "-> Compression initiale de $BASE_NAME sur la source..."
+                if [[ "$DRY_RUN" == "false" ]]; then
+                    gzip -f "$WORKING_FILE"
+                    WORKING_FILE="${WORKING_FILE}.gz"
+                else
+                    echo "[Dry-Run] gzip -f \"$WORKING_FILE\""
+                    WORKING_FILE="${WORKING_FILE}.gz"
+                fi
+            fi
             
-            IS_ARCHIVED_LOCALLY=false
+            # Mettre à jour le chemin relatif et le nom compressé
+            REL_PATH="${WORKING_FILE#$SRC_DIR}"
+            LOCAL_COMPRESSED_PATH="${DST_DIR}${FILE_MONTH}/${REL_PATH}"
+            is_archived_locally=false
             
-            # 1. Vérification si le fichier est déjà archivé et compressé localement
+            # 2. Vérification si le fichier compressé existe déjà dans l'archive locale
             if [[ -f "$LOCAL_COMPRESSED_PATH" ]]; then
                 echo "Déjà archivé localement (compressé) : $REL_PATH dans $FILE_MONTH"
-                IS_ARCHIVED_LOCALLY=true
+                is_archived_locally=true
             else
-                # Archivage local temporaire (non compressé)
-                echo "Archivage local requis pour : $REL_PATH"
+                # Copie directe vers le dossier d'archivage mensuel local
+                echo "Copie vers l'archive locale : $REL_PATH -> $FILE_MONTH/"
                 if [[ "$DRY_RUN" == "false" ]]; then
-                    # S'assurer que le sous-dossier existe (pour préserver la hiérarchie)
-                    mkdir -p "$(dirname "$LOCAL_UNCOMPRESSED_PATH")"
+                    # Créer le répertoire mensuel local
+                    mkdir -p "$(dirname "$LOCAL_COMPRESSED_PATH")"
                     
-                    # Copier le fichier localement
-                    cp -f "$LOCAL_FILE" "$LOCAL_UNCOMPRESSED_PATH"
+                    # Copier le fichier compressé
+                    cp -f "$WORKING_FILE" "$LOCAL_COMPRESSED_PATH"
                     
-                    # Vérification de la taille locale
-                    COPY_SIZE=$(stat -c %s "$LOCAL_UNCOMPRESSED_PATH")
-                    if [[ "$COPY_SIZE" -eq "$LOCAL_SIZE" ]]; then
-                        # Compression locale
-                        gzip -f "$LOCAL_UNCOMPRESSED_PATH"
-                        
-                        # Créer le répertoire mensuel local
-                        mkdir -p "${DST_DIR}${FILE_MONTH}"
-                        
-                        # Déplacer le fichier compressé
-                        mv -f "${LOCAL_UNCOMPRESSED_PATH}.gz" "${DST_DIR}${FILE_MONTH}/"
-                        
-                        if [[ -f "$LOCAL_COMPRESSED_PATH" ]]; then
-                            echo "Archivage et compression locaux OK pour : $REL_PATH"
-                            IS_ARCHIVED_LOCALLY=true
-                        else
-                            echo "ERREUR : Échec du déplacement du fichier compressé pour $REL_PATH." >&2
-                        fi
+                    # Vérification de la taille
+                    ORIG_SIZE=$(stat -c %s "$WORKING_FILE")
+                    COPY_SIZE=$(stat -c %s "$LOCAL_COMPRESSED_PATH")
+                    
+                    if [[ "$COPY_SIZE" -eq "$ORIG_SIZE" ]]; then
+                        echo "Copie locale OK pour : $REL_PATH"
+                        is_archived_locally=true
                     else
                         echo "ERREUR : Échec de la copie locale pour $REL_PATH (différence de taille)." >&2
                     fi
                 else
-                    echo "[Dry-Run] cp $LOCAL_FILE vers $LOCAL_UNCOMPRESSED_PATH"
-                    echo "[Dry-Run] gzip $LOCAL_UNCOMPRESSED_PATH"
-                    echo "[Dry-Run] mv ${LOCAL_UNCOMPRESSED_PATH}.gz vers ${DST_DIR}${FILE_MONTH}/"
-                    IS_ARCHIVED_LOCALLY=true
+                    echo "[Dry-Run] mkdir -p \"$(dirname "$LOCAL_COMPRESSED_PATH")\""
+                    echo "[Dry-Run] cp -f \"$WORKING_FILE\" vers \"$LOCAL_COMPRESSED_PATH\""
+                    is_archived_locally=true
                 fi
             fi
             
-            # 2. Nettoyage local du répertoire d'origine si le fichier appartient à un mois précédent
-            if [[ "$IS_ARCHIVED_LOCALLY" == "true" ]]; then
+            # 3. Nettoyage du répertoire d'origine si le fichier appartient à un mois précédent
+            if [[ "$is_archived_locally" == "true" ]]; then
                 if [[ "$FILE_MONTH" != "$CURRENT_MONTH" ]]; then
                     if [[ "$DRY_RUN" == "false" ]]; then
-                        echo "Nettoyage d'origine : Suppression de $LOCAL_FILE (mois précédent : $FILE_MONTH)"
-                        rm -f "$LOCAL_FILE"
+                        echo "Nettoyage d'origine : Suppression de $WORKING_FILE (mois précédent : $FILE_MONTH)"
+                        rm -f "$WORKING_FILE"
                     else
-                        echo "[Dry-Run] Nettoyage d'origine : Suppression de $LOCAL_FILE"
+                        echo "[Dry-Run] Nettoyage d'origine : Suppression de $WORKING_FILE"
                     fi
                 else
                     echo "Fichier d'origine conservé (mois en cours : $FILE_MONTH) : $REL_PATH"
@@ -187,7 +201,7 @@ for i in "${!SOURCES[@]}"; do
         echo "Aucun fichier local dans le dossier d'origine $SRC_DIR."
     fi
     
-    # 3. Synchronisation vers le serveur d'archivage distant
+    # 4. Synchronisation vers le serveur d'archivage distant
     echo "Synchronisation de l'archive locale vers le serveur distant..."
     if [[ "$DRY_RUN" == "false" ]]; then
         # S'assurer que le répertoire cible existe sur le serveur distant
