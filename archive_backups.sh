@@ -6,11 +6,11 @@
 # DESCRIPTION   : 
 #   1. Compression Initiale : Compresse les sauvegardes sur place (.gz) dans /backup/...
 #   2. Niveau Local (Niveau 1) : Copie les sauvegardes compressées directement
-#      dans leur sous-dossier mensuel d'archivage local (ex: /housekeeping/.../AAAA-MM/).
+#      dans leur sous-dossier mensuel d'archivage local (ex: /backup/.../AAAA-MM/).
 #   3. Niveau Distant (Niveau 2) : Synchronise le répertoire d'archivage local
-#      /housekeeping/... vers le serveur d'archivage distant via rsync.
+#      /backup/... vers le serveur d'archivage distant via rsync.
 #   4. Nettoyage : Supprime les fichiers gzippés du répertoire d'origine (/backup/...)
-#      des mois précédents (seul le mois en cours est conservé localement).
+#      après archivage réussi.
 # ==============================================================================
 
 # Mode strict
@@ -39,10 +39,10 @@ SOURCES=(
 
 # Répertoires d'archivage correspondants (locaux et distants)
 DESTS=(
-    "/housekeeping/rman/FULL_BD_DUMP/"
-    "/housekeeping/rman/ALL_ARCHIVE_LOGS/"
-    "/housekeeping/sauv_ap/"
-    "/housekeeping/sauv_av/"
+    "/backup/rman/FULL_BD_DUMP/"
+    "/backup/rman/ALL_ARCHIVE_LOGS/"
+    "/backup/sauv_ap/"
+    "/backup/sauv_av/"
 )
 
 echo "Serveur d'archivage distant : $ARCHIVE_SERVER"
@@ -87,8 +87,8 @@ for i in "${!SOURCES[@]}"; do
         echo "[Dry-Run] mkdir -p local : $DST_DIR"
     fi
     
-    # Lister les fichiers locaux dans le dossier d'origine
-    LOCAL_FILES=$(find "$SRC_DIR" -type f 2>/dev/null || true)
+    # Lister les fichiers locaux dans le dossier d'origine (en excluant les répertoires d'archivage mensuels YYYY-MM)
+    LOCAL_FILES=$(find "$SRC_DIR" -type d -name "20[0-9][0-9]-[0-9][0-9]" -prune -o -type f -print 2>/dev/null || true)
     
     if [[ -n "$LOCAL_FILES" ]]; then
         while IFS= read -r LOCAL_FILE; do

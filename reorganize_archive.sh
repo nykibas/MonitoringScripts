@@ -33,10 +33,10 @@ fi
 
 # Répertoires d'archivage par défaut
 DEFAULT_DIRS=(
-    "/housekeeping/rman/FULL_BD_DUMP/"
-    "/housekeeping/rman/ALL_ARCHIVE_LOGS/"
-    "/housekeeping/sauv_ap/"
-    "/housekeeping/sauv_av/"
+    "/backup/rman/FULL_BD_DUMP/"
+    "/backup/rman/ALL_ARCHIVE_LOGS/"
+    "/backup/sauv_ap/"
+    "/backup/sauv_av/"
 )
 
 # Fonction pour réorganiser un dossier
