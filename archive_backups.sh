@@ -182,21 +182,24 @@ for i in "${!SOURCES[@]}"; do
                 fi
             fi
             
-            # 3. Nettoyage du répertoire d'origine si le fichier appartient à un mois précédent
+            # 3. Nettoyage immédiat du répertoire d'origine après copie réussie
             if [[ "$is_archived_locally" == "true" ]]; then
-                if [[ "$FILE_MONTH" != "$CURRENT_MONTH" ]]; then
-                    if [[ "$DRY_RUN" == "false" ]]; then
-                        echo "Nettoyage d'origine : Suppression de $WORKING_FILE (mois précédent : $FILE_MONTH)"
-                        rm -f "$WORKING_FILE"
-                    else
-                        echo "[Dry-Run] Nettoyage d'origine : Suppression de $WORKING_FILE"
-                    fi
+                if [[ "$DRY_RUN" == "false" ]]; then
+                    echo "Nettoyage d'origine : Suppression de $WORKING_FILE (archivé dans $FILE_MONTH)"
+                    rm -f "$WORKING_FILE"
                 else
-                    echo "Fichier d'origine conservé (mois en cours : $FILE_MONTH) : $REL_PATH"
+                    echo "[Dry-Run] Nettoyage d'origine : Suppression de $WORKING_FILE"
                 fi
             fi
             
         done <<< "$LOCAL_FILES"
+        
+        # Nettoyage des sous-répertoires vides dans la source
+        if [[ "$DRY_RUN" == "false" ]]; then
+            find "$SRC_DIR" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+        else
+            echo "[Dry-Run] Nettoyage des sous-répertoires vides dans $SRC_DIR"
+        fi
     else
         echo "Aucun fichier local dans le dossier d'origine $SRC_DIR."
     fi
