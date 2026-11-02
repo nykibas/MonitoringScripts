@@ -25,6 +25,10 @@ LOG_FILE="$BACKUP_ROOT/rman_backup_parallel_$DATE_STR.log"
 RETENTION_HOURS=12
 RETENTION_MINUTES=$((RETENTION_HOURS * 60))
 
+# Durée de conservation des logs RMAN de ce script (en jours)
+LOG_RETENTION_DAYS=7
+LOG_RETENTION_MINUTES=$((LOG_RETENTION_DAYS * 24 * 60))
+
 # Création des répertoires si nécessaire
 # mkdir -p $DB_DUMP_DIR $ARCH_DUMP_DIR
 
@@ -59,6 +63,23 @@ for PURGE_SPEC in "$ARCH_DUMP_DIR:ARCH_*" "$DB_DUMP_DIR:SPF_*"; do
     done < <(find "$PURGE_DIR" -maxdepth 1 -type f -name "$PURGE_PATTERN" -mmin +$RETENTION_MINUTES 2>/dev/null)
 done
 echo "  Total fichiers supprimés : $PURGE_COUNT" >> $LOG_FILE
+echo "------------------------------------------------------------" >> $LOG_FILE
+
+# 2c. Purge hebdomadaire des logs RMAN (conservation de 7 jours)
+# Seuls les logs rman_backup_parallel_*.log à la racine de $BACKUP_ROOT sont concernés.
+echo "PURGE DES LOGS RMAN DE PLUS DE ${LOG_RETENTION_DAYS} JOURS :" >> $LOG_FILE
+LOG_PURGE_COUNT=0
+while IFS= read -r OLD_LOG; do
+    [ -z "$OLD_LOG" ] && continue
+    [ "$OLD_LOG" = "$LOG_FILE" ] && continue
+    if rm -f "$OLD_LOG"; then
+        echo "  Supprimé : $OLD_LOG" >> $LOG_FILE
+        LOG_PURGE_COUNT=$((LOG_PURGE_COUNT + 1))
+    else
+        echo "  ERREUR de suppression : $OLD_LOG" >> $LOG_FILE
+    fi
+done < <(find "$BACKUP_ROOT" -maxdepth 1 -type f -name "rman_backup_parallel_*.log" -mmin +$LOG_RETENTION_MINUTES 2>/dev/null)
+echo "  Total logs supprimés : $LOG_PURGE_COUNT" >> $LOG_FILE
 echo "------------------------------------------------------------" >> $LOG_FILE
 
 # 3. Lancement de RMAN
