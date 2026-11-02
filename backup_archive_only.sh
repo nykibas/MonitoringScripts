@@ -21,12 +21,44 @@ DB_DUMP_DIR="$BACKUP_ROOT/FULL_BD_DUMP"
 ARCH_DUMP_DIR="$BACKUP_ROOT/ALL_ARCHIVE_LOGS"
 LOG_FILE="$BACKUP_ROOT/rman_backup_parallel_$DATE_STR.log"
 
+# Durée de conservation locale des fichiers de backup (en heures)
+RETENTION_HOURS=12
+RETENTION_MINUTES=$((RETENTION_HOURS * 60))
+
 # Création des répertoires si nécessaire
 # mkdir -p $DB_DUMP_DIR $ARCH_DUMP_DIR
 
 echo "------------------------------------------------------------" > $LOG_FILE
 echo "DÉBUT DU BACKUP RMAN - OWNER: Yannick Nzau" >> $LOG_FILE
 echo "DATE : $(date)" >> $LOG_FILE
+echo "------------------------------------------------------------" >> $LOG_FILE
+
+# 2b. Purge des fichiers de backup de plus de 12h
+# - Cible uniquement les pièces générées par ce script : ARCH_* (archivelogs) et SPF_* (SPFILE),
+#   compressées (.gz) ou non.
+# - -maxdepth 1 : les sous-dossiers mensuels d'archivage (AAAA-MM) ne sont jamais touchés.
+# - Les sauvegardes FULL des datafiles et les autobackups du controlfile (conf_*) sont conservés.
+# - Le CROSSCHECK lancé ensuite dans RMAN met le catalogue à jour (pièces supprimées -> EXPIRED -> purgées).
+echo "PURGE DES FICHIERS DE BACKUP DE PLUS DE ${RETENTION_HOURS}H :" >> $LOG_FILE
+PURGE_COUNT=0
+for PURGE_SPEC in "$ARCH_DUMP_DIR:ARCH_*" "$DB_DUMP_DIR:SPF_*"; do
+    PURGE_DIR="${PURGE_SPEC%%:*}"
+    PURGE_PATTERN="${PURGE_SPEC#*:}"
+    if [ ! -d "$PURGE_DIR" ]; then
+        echo "  Répertoire introuvable, ignoré : $PURGE_DIR" >> $LOG_FILE
+        continue
+    fi
+    while IFS= read -r OLD_FILE; do
+        [ -z "$OLD_FILE" ] && continue
+        if rm -f "$OLD_FILE"; then
+            echo "  Supprimé : $OLD_FILE" >> $LOG_FILE
+            PURGE_COUNT=$((PURGE_COUNT + 1))
+        else
+            echo "  ERREUR de suppression : $OLD_FILE" >> $LOG_FILE
+        fi
+    done < <(find "$PURGE_DIR" -maxdepth 1 -type f -name "$PURGE_PATTERN" -mmin +$RETENTION_MINUTES 2>/dev/null)
+done
+echo "  Total fichiers supprimés : $PURGE_COUNT" >> $LOG_FILE
 echo "------------------------------------------------------------" >> $LOG_FILE
 
 # 3. Lancement de RMAN
